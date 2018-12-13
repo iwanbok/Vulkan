@@ -7,11 +7,11 @@ layout (binding = 0, rgba8) uniform writeonly image2D resultImage;
 
 #define EPSILON 0.0001
 #define MAXLEN 1000.0
-#define SHADOW 0.5
-#define RAYBOUNCES 2
-#define REFLECTIONS true
-#define REFLECTIONSTRENGTH 0.4
-#define REFLECTIONFALLOFF 0.5
+#define MAXBOUNCES 5
+#define BLACK vec3(0)
+#define WHITE vec3(1)
+#define PI 3.14159265358979323846264338327950288419716939937510582097494459072381640628620899862803482534211706798f
+#define UINT_MAX 0xffffffffu
 
 struct Camera 
 {
@@ -26,10 +26,42 @@ layout (binding = 1) uniform UBO
 	float aspectRatio;
 	vec4 fogColor;
 	Camera camera;
+	uint seed;
 	mat4 rotMat;
 } ubo;
 
-struct Sphere 
+uint state = ubo.seed;
+
+uint xorshift32()
+{
+	/* Algorithm "xor" from p. 4 of Marsaglia, "Xorshift RNGs" */
+	uint x = state;
+	x ^= x << 13;
+	x ^= x >> 17;
+	x ^= x << 5;
+	state = x;
+	return x;
+}
+
+float floatConstruct( uint m ) 
+{
+    const uint ieeeMantissa = 0x007FFFFFu; // binary32 mantissa bitmask
+    const uint ieeeOne      = 0x3F800000u; // 1.0 in IEEE binary32
+
+    m &= ieeeMantissa;                     // Keep only mantissa bits (fractional part)
+    m |= ieeeOne;                          // Add fractional part to 1.0
+
+    float  f = uintBitsToFloat( m );       // Range [1:2]
+    return f - 1.0;                        // Range [0:1]
+}
+
+float frand()
+{
+	return floatConstruct( xorshift32() );
+}
+
+
+/*struct Sphere 
 {
 	vec3 pos;
 	float radius;
@@ -55,174 +87,166 @@ layout (std140, binding = 2) buffer Spheres
 layout (std140, binding = 3) buffer Planes
 {
 	Plane planes[ ];
+};*/
+
+// Primitive Types
+const uint PRIMITIVE_SPHERE = 0x00000001u;
+const uint PRIMITIVE_PLANE = 0x00000002u;
+
+// Material Types
+const uint MATERIAL_DIFFUSE = 0x00000001u;
+const uint MATERIAL_SPECULAR = 0x00000002u;
+const uint MATERIAL_DIELICTRIC = 0x00000004u;
+const uint MATERIAL_LIGHT = 0x00000008u;
+
+struct Primitive
+{
+	vec3 v1;
+	float f1;
+	vec3 v2;
+	float f2;
+	uint type;
+	uint material;
 };
 
-void reflectRay(inout vec3 rayD, in vec3 mormal)
+layout (std140, binding = 2) buffer Primitives
 {
-	rayD = rayD + 2.0 * -dot(mormal, rayD) * mormal;
-}
+	Primitive primitives[ ];
+};
 
-// Lighting =========================================================
-
-float lightDiffuse(vec3 normal, vec3 lightDir) 
+struct Ray
 {
-	return clamp(dot(normal, lightDir), 0.1, 1.0);
-}
+	vec3 O;
+	vec3 D;
+};
 
-float lightSpecular(vec3 normal, vec3 lightDir, float specularFactor)
+float sphereIntersect( Ray r, Primitive sphere )
 {
-	vec3 viewVec = normalize(ubo.camera.pos);
-	vec3 halfVec = normalize(lightDir + viewVec);
-	return pow(clamp(dot(normal, halfVec), 0.0, 1.0), specularFactor);
-}
+	vec3 oc = r.O - sphere.v1;
+	float b = 2.f * dot( oc, r.D );
+	float c = dot( oc, oc ) - sphere.f1 * sphere.f1;
+	float D = b * b - 4.f * c;
 
-// Sphere ===========================================================
+	if ( D < 0.f )
+		return -1;
 
-float sphereIntersect(in vec3 rayO, in vec3 rayD, in Sphere sphere)
-{
-	vec3 oc = rayO - sphere.pos;
-	float b = 2.0 * dot(oc, rayD);
-	float c = dot(oc, oc) - sphere.radius*sphere.radius;
-	float h = b*b - 4.0*c;
-	if (h < 0.0) 
-	{
-		return -1.0;
-	}
-	float t = (-b - sqrt(h)) / 2.0;
-
+	float t = ( -b - sqrt( D ) ) / 2.f;
 	return t;
 }
 
-vec3 sphereNormal(in vec3 pos, in Sphere sphere)
+float planeIntersect( Ray r, Primitive plane)
 {
-	return (pos - sphere.pos) / sphere.radius;
-}
+	float d = dot( r.D, plane.v1 );
 
-// Plane ===========================================================
+	if ( d == 0.f )
+		return -1;
 
-float planeIntersect(vec3 rayO, vec3 rayD, Plane plane)
-{
-	float d = dot(rayD, plane.normal);
-
-	if (d == 0.0)
-		return 0.0;
-
-	float t = -(plane.distance + dot(rayO, plane.normal)) / d;
-
-	if (t < 0.0)
-		return 0.0;
-
+	float t = -( plane.f1 + dot( r.O, plane.v1 ) ) / d;
 	return t;
 }
 
-	
-int intersect(in vec3 rayO, in vec3 rayD, inout float resT)
+float intersect( Ray r, Primitive p)
 {
-	int id = -1;
-
-	for (int i = 0; i < spheres.length(); i++)
+	float t = -1;
+	switch(p.type)
 	{
-		float tSphere = sphereIntersect(rayO, rayD, spheres[i]);
-		if ((tSphere > EPSILON) && (tSphere < resT))
-		{
-			id = spheres[i].id;
-			resT = tSphere;
-		}
-	}	
-
-	for (int i = 0; i < planes.length(); i++)
-	{
-		float tplane = planeIntersect(rayO, rayD, planes[i]);
-		if ((tplane > EPSILON) && (tplane < resT))
-		{
-			id = planes[i].id;
-			resT = tplane;
-		}	
+	case PRIMITIVE_PLANE:
+		t = planeIntersect(r, p);
+		break;
+	case PRIMITIVE_SPHERE:
+		t = sphereIntersect(r,p);
+		break;
 	}
-	
-	return id;
+	return t;
 }
 
-float calcShadow(in vec3 rayO, in vec3 rayD, in int objectId, inout float t)
+vec3 getNormal( Primitive p, vec3 pos )
 {
-	for (int i = 0; i < spheres.length(); i++)
+	switch(p.type)
 	{
-		if (spheres[i].id == objectId)
-			continue;
-		float tSphere = sphereIntersect(rayO, rayD, spheres[i]);
-		if ((tSphere > EPSILON) && (tSphere < t))
-		{
-			t = tSphere;
-			return SHADOW;
-		}
-	}		
-	return 1.0;
-}
-
-vec3 fog(in float t, in vec3 color)
-{
-	return mix(color, ubo.fogColor.rgb, clamp(sqrt(t*t)/20.0, 0.0, 1.0));
-}
-
-vec3 renderScene(inout vec3 rayO, inout vec3 rayD, inout int id)
-{
-	vec3 color = vec3(0.0);
-	float t = MAXLEN;
-
-	// Get intersected object ID
-	int objectID = intersect(rayO, rayD, t);
-	
-	if (objectID == -1)
-	{
-		return color;
+	case PRIMITIVE_PLANE:
+		return p.v1;
+	case PRIMITIVE_SPHERE:
+		return ( pos - p.v1 ) / p.f1;
+	default:
+		return vec3(1,0,0);
 	}
-	
-	vec3 pos = rayO + t * rayD;
-	vec3 lightVec = normalize(ubo.lightPos - pos);				
+}
+
+struct Intersection
+{
+	vec3 pos;
+	float t;
 	vec3 normal;
+	int id;
+};
 
-	// Planes
-
-	// Spheres
-
-	for (int i = 0; i < planes.length(); i++)
+Intersection trace( Ray r )
+{
+	Intersection I = Intersection(vec3(0), MAXLEN, vec3(0), -1);
+	for(int i = 0; i < primitives.length(); i++)
 	{
-		if (objectID == planes[i].id)
-		{
-			normal = planes[i].normal;
-			float diffuse = lightDiffuse(normal, lightVec);
-			float specular = lightSpecular(normal, lightVec, planes[i].specular);
-			color = diffuse * planes[i].diffuse + specular;	
+		float tI = intersect(r, primitives[i]);
+		if( tI > EPSILON && tI < I.t )
+		{	
+			I.t = tI;
+			I.id = i;
 		}
 	}
 
-	for (int i = 0; i < spheres.length(); i++)
-	{
-		if (objectID == spheres[i].id)
+	if(I.id == -1) return I;
+
+	I.pos = r.O + I.t * r.D;
+	I.normal = getNormal( primitives[I.id], I.pos );
+
+	return I;
+}
+
+vec3 DiffuseReflection( vec3 N )
+{
+	float u = frand();
+	float v = frand();
+	
+	float theta = 2.0f * PI * u;
+	float phi = acos(2.0f * v - 1.0f);
+
+	float costheta = cos(theta);
+	float sintheta = sin(theta);
+	float cosphi = cos(phi);
+	float sinphi = sin(phi);
+
+	vec3 R = vec3(costheta * sinphi, sintheta * sinphi, cosphi);
+	if(dot(R, N) <= 0.0f)
+		R *= -1.0f;
+
+	return R;
+}
+
+vec3 Sample( Ray r )
+{
+	vec3 color = WHITE;
+	for( int i = MAXBOUNCES; i > 0; i--)
+	{	
+		Intersection I = trace( r );
+
+		if(I.id == -1)
 		{
-			normal = sphereNormal(pos, spheres[i]);	
-			float diffuse = lightDiffuse(normal, lightVec);
-			float specular = lightSpecular(normal, lightVec, spheres[i].specular);
-			color = diffuse * spheres[i].diffuse + specular;	
+			color = BLACK;
+			break;
 		}
+
+		if(primitives[I.id].material == MATERIAL_LIGHT) 
+		{	
+			color *= primitives[I.id].v2;
+			break;
+		}
+
+		vec3 R = DiffuseReflection( I.normal );
+		r = Ray(I.pos, R );
+
+		vec3 BRDF = primitives[I.id].v2 / PI;
+		color *= PI * 2.0f * BRDF * dot(I.normal, R);
 	}
-
-	if (id == -1)
-		return color;
-
-	id = objectID;
-
-	// Shadows
-	t = length(ubo.lightPos - pos);
-	color *= calcShadow(pos, lightVec, id, t);
-	
-	// Fog
-	color = fog(t, color);	
-	
-	// Reflect ray for next render pass
-	reflectRay(rayD, normal);
-	rayO = pos;	
-	
 	return color;
 }
 
@@ -231,24 +255,9 @@ void main()
 	ivec2 dim = imageSize(resultImage);
 	vec2 uv = vec2(gl_GlobalInvocationID.xy) / dim;
 
-	vec3 rayO = ubo.camera.pos;
-	vec3 rayD = normalize(vec3((-1.0 + 2.0 * uv) * vec2(ubo.aspectRatio, 1.0), -1.0));
-		
-	// Basic color path
-	int id = 0;
-	vec3 finalColor = renderScene(rayO, rayD, id);
-	
-	// Reflection
-	if (REFLECTIONS)
-	{
-		float reflectionStrength = REFLECTIONSTRENGTH;
-		for (int i = 0; i < RAYBOUNCES; i++)
-		{
-			vec3 reflectionColor = renderScene(rayO, rayD, id);
-			finalColor = (1.0 - reflectionStrength) * finalColor + reflectionStrength * mix(reflectionColor, finalColor, 1.0 - reflectionStrength);			
-			reflectionStrength *= REFLECTIONFALLOFF;
-		}
-	}
+	Ray r = Ray( ubo.camera.pos, normalize(vec3((-1.0 + 2.0 * uv) * vec2(ubo.aspectRatio, 1.0), -1.0)) );
+
+	vec3 finalColor = Sample(r);
 			
 	imageStore(resultImage, ivec2(gl_GlobalInvocationID.xy), vec4(finalColor, 0.0));
 }

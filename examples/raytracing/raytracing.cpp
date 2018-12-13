@@ -22,13 +22,18 @@
 #include "VulkanTexture.hpp"
 
 #define VERTEX_BUFFER_BIND_ID 0
-#define ENABLE_VALIDATION false
+#define ENABLE_VALIDATION true
 
 #if defined(__ANDROID__)
 #define TEX_DIM 1024
 #else
 #define TEX_DIM 2048
 #endif
+
+#define MATERIAL_DIFFUSE 0x00000001u
+#define MATERIAL_SPECULAR 0x00000002u
+#define MATERIAL_DIELECTRIC 0x00000004u
+#define MATERIAL_LIGHT 0x00000008u
 
 class VulkanExample : public VulkanExampleBase
 {
@@ -47,8 +52,8 @@ public:
 	// Resources for the compute part of the example
 	struct {
 		struct {
-			vks::Buffer spheres;						// (Shader) storage buffer object with scene spheres
-			vks::Buffer planes;						// (Shader) storage buffer object with scene planes
+			vks::Buffer primitives;						// (Shader) storage buffer object with scene spheres
+			//vks::Buffer planes;						// (Shader) storage buffer object with scene planes
 		} storageBuffers;
 		vks::Buffer uniformBuffer;					// Uniform buffer object containing scene data
 		VkQueue queue;								// Separate queue for compute commands (queue family may differ from the one used for graphics)
@@ -62,16 +67,17 @@ public:
 		struct UBOCompute {							// Compute shader uniform block object
 			glm::vec3 lightPos;
 			float aspectRatio;						// Aspect ratio of the viewport
-			glm::vec4 fogColor = glm::vec4(0.0f);
+			glm::vec4 fogColor = glm::vec4(1.0f, 0,0,0.0f);
 			struct {
 				glm::vec3 pos = glm::vec3(0.0f, 0.0f, 4.0f);
 				glm::vec3 lookat = glm::vec3(0.0f, 0.5f, 0.0f);
 				float fov = 10.0f;
 			} camera;
+			uint32_t seed;
 		} ubo;
 	} compute;
 
-	// SSBO sphere declaration 
+	/*// SSBO sphere declaration 
 	struct Sphere {									// Shader uses std140 layout (so we only use vec4 instead of vec3)
 		glm::vec3 pos;								
 		float radius;
@@ -89,6 +95,17 @@ public:
 		float specular;
 		uint32_t id;
 		glm::ivec3 _pad;
+	};*/
+
+	// SSBO primitive declaration
+	struct Primitive {
+		glm::vec3 v1;
+		float f1;
+		glm::vec3 v2;
+		float f2;
+		uint32_t type;
+		uint32_t material;
+		glm::ivec2 _pad;
 	};
 
 	VulkanExample() : VulkanExampleBase(ENABLE_VALIDATION)
@@ -120,8 +137,8 @@ public:
 		vkDestroyFence(device, compute.fence, nullptr);
 		vkDestroyCommandPool(device, compute.commandPool, nullptr);
 		compute.uniformBuffer.destroy();
-		compute.storageBuffers.spheres.destroy();
-		compute.storageBuffers.planes.destroy();
+		compute.storageBuffers.primitives.destroy();
+		//compute.storageBuffers.planes.destroy();
 
 		textureComputeTarget.destroy();
 	}
@@ -292,27 +309,30 @@ public:
 		vkEndCommandBuffer(compute.commandBuffer);
 	}
 
-	uint32_t currentId = 0;	// Id used to identify objects by the ray tracing shader
+	//uint32_t currentId = 0;	// Id used to identify objects by the ray tracing shader
 
-	Sphere newSphere(glm::vec3 pos, float radius, glm::vec3 diffuse, float specular)
+	//TODO: Change specular
+	Primitive newSphere(glm::vec3 pos, float radius, glm::vec3 diffuse, float specular, uint32_t material)
 	{
-		Sphere sphere;
-		sphere.id = currentId++;
-		sphere.pos = pos;
-		sphere.radius = radius;
-		sphere.diffuse = diffuse;
-		sphere.specular = specular;
+		Primitive sphere;
+		sphere.type = 0x00000001u;
+		sphere.v1 = pos;
+		sphere.f1 = radius;
+		sphere.v2 = diffuse;
+		sphere.f2 = specular;
+		sphere.material = material;
 		return sphere;
 	}
 
-	Plane newPlane(glm::vec3 normal, float distance, glm::vec3 diffuse, float specular)
+	Primitive newPlane(glm::vec3 normal, float distance, glm::vec3 diffuse, float specular, uint32_t material)
 	{
-		Plane plane;
-		plane.id = currentId++;
-		plane.normal = normal;
-		plane.distance = distance;
-		plane.diffuse = diffuse;
-		plane.specular = specular;
+		Primitive plane;
+		plane.type = 0x00000002u;
+		plane.v1 = normal;
+		plane.f1 = distance;
+		plane.v2 = diffuse;
+		plane.f2 = specular;
+		plane.material = material;
 		return plane;
 	}
 
@@ -320,11 +340,12 @@ public:
 	void prepareStorageBuffers()
 	{
 		// Spheres
-		std::vector<Sphere> spheres;
-		spheres.push_back(newSphere(glm::vec3(1.75f, -0.5f, 0.0f), 1.0f, glm::vec3(0.0f, 1.0f, 0.0f), 32.0f));
-		spheres.push_back(newSphere(glm::vec3(0.0f, 1.0f, -0.5f), 1.0f, glm::vec3(0.65f, 0.77f, 0.97f), 32.0f));
-		spheres.push_back(newSphere(glm::vec3(-1.75f, -0.75f, -0.5f), 1.25f, glm::vec3(0.9f, 0.76f, 0.46f), 32.0f));
-		VkDeviceSize storageBufferSize = spheres.size() * sizeof(Sphere);
+		std::vector<Primitive> primitves;
+		primitves.push_back(newSphere(glm::vec3(1.75f, -0.5f, 0.0f), 1.0f, glm::vec3(0.0f, 1.0f, 0.0f), 32.0f, MATERIAL_DIFFUSE));
+		primitves.push_back(newSphere(glm::vec3(0.0f, 1.0f, -0.5f), 1.0f, glm::vec3(0.65f, 0.77f, 0.97f), 32.0f, MATERIAL_DIFFUSE));
+		primitves.push_back(newSphere(glm::vec3(-1.75f, -0.75f, -0.5f), 1.25f, glm::vec3(100.f, 100.f, 100.f), 32.0f, MATERIAL_LIGHT));
+		primitves.push_back(newPlane(glm::vec3(0.0f, -1.0f, 0.0f), 4.0f, glm::vec3(1.0f), 32.0f, MATERIAL_DIFFUSE));
+		VkDeviceSize storageBufferSize = primitves.size() * sizeof(Primitive);
 
 		// Stage
 		vks::Buffer stagingBuffer;
@@ -334,26 +355,26 @@ public:
 			VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
 			&stagingBuffer,
 			storageBufferSize,
-			spheres.data());
+			primitves.data());
 
 		vulkanDevice->createBuffer(
 			// The SSBO will be used as a storage buffer for the compute pipeline and as a vertex buffer in the graphics pipeline
 			VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
 			VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-			&compute.storageBuffers.spheres,
+			&compute.storageBuffers.primitives,
 			storageBufferSize);
 
 		// Copy to staging buffer
 		VkCommandBuffer copyCmd = VulkanExampleBase::createCommandBuffer(VK_COMMAND_BUFFER_LEVEL_PRIMARY, true);
 		VkBufferCopy copyRegion = {};
 		copyRegion.size = storageBufferSize;
-		vkCmdCopyBuffer(copyCmd, stagingBuffer.buffer, compute.storageBuffers.spheres.buffer, 1, &copyRegion);
+		vkCmdCopyBuffer(copyCmd, stagingBuffer.buffer, compute.storageBuffers.primitives.buffer, 1, &copyRegion);
 		VulkanExampleBase::flushCommandBuffer(copyCmd, queue, true);
 
 		stagingBuffer.destroy();
 
 		// Planes
-		std::vector<Plane> planes;
+		/*std::vector<Primitive> planes;
 		const float roomDim = 4.0f;
 		planes.push_back(newPlane(glm::vec3(0.0f, 1.0f, 0.0f), roomDim, glm::vec3(1.0f), 32.0f));
 		planes.push_back(newPlane(glm::vec3(0.0f, -1.0f, 0.0f), roomDim, glm::vec3(1.0f), 32.0f));
@@ -384,7 +405,7 @@ public:
 		vkCmdCopyBuffer(copyCmd, stagingBuffer.buffer, compute.storageBuffers.planes.buffer, 1, &copyRegion);
 		VulkanExampleBase::flushCommandBuffer(copyCmd, queue, true);
 
-		stagingBuffer.destroy();
+		stagingBuffer.destroy();*/
 	}
 
 	void setupDescriptorPool()
@@ -563,16 +584,16 @@ public:
 				VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
 				VK_SHADER_STAGE_COMPUTE_BIT,
 				1),
-			// Binding 1: Shader storage buffer for the spheres
+			// Binding 2: Shader storage buffer for the primitives
 			vks::initializers::descriptorSetLayoutBinding(
 				VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
 				VK_SHADER_STAGE_COMPUTE_BIT,
-				2),
+				2)/*,
 			// Binding 1: Shader storage buffer for the planes
 			vks::initializers::descriptorSetLayoutBinding(
 				VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
 				VK_SHADER_STAGE_COMPUTE_BIT,
-				3)
+				3)*/
 		};
 
 		VkDescriptorSetLayoutCreateInfo descriptorLayout =
@@ -616,13 +637,13 @@ public:
 				compute.descriptorSet,
 				VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
 				2,
-				&compute.storageBuffers.spheres.descriptor),
-			// Binding 2: Shader storage buffer for the planes
+				&compute.storageBuffers.primitives.descriptor),
+			/*// Binding 2: Shader storage buffer for the planes
 			vks::initializers::writeDescriptorSet(
 				compute.descriptorSet,
 				VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
 				3,
-				&compute.storageBuffers.planes.descriptor)
+				&compute.storageBuffers.planes.descriptor)*/
 		};
 
 		vkUpdateDescriptorSets(device, computeWriteDescriptorSets.size(), computeWriteDescriptorSets.data(), 0, NULL);
@@ -679,6 +700,7 @@ public:
 		compute.ubo.lightPos.y = 0.0f + sin(glm::radians(timer * 360.0f)) * 2.0f;
 		compute.ubo.lightPos.z = 0.0f + cos(glm::radians(timer * 360.0f)) * 2.0f;
 		compute.ubo.camera.pos = camera.position * -1.0f;
+		compute.ubo.seed = rand();
 		VK_CHECK_RESULT(compute.uniformBuffer.map());
 		memcpy(compute.uniformBuffer.mapped, &compute.ubo, sizeof(compute.ubo));
 		compute.uniformBuffer.unmap();
