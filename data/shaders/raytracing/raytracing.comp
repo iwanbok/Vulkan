@@ -3,7 +3,7 @@
 #version 450
 
 layout (local_size_x = 16, local_size_y = 16) in;
-layout (binding = 0, rgba8) uniform writeonly image2D resultImage;
+layout (binding = 0, rgba8) uniform image2D resultImage;
 
 #define EPSILON 0.0001
 #define MAXLEN 1000.0
@@ -24,13 +24,13 @@ layout (binding = 1) uniform UBO
 {
 	vec3 lightPos;
 	float aspectRatio;
-	vec4 fogColor;
-	Camera camera;
+	vec2 fogColor;
 	uint seed;
-	mat4 rotMat;
+	uint samples;
+	Camera camera;
 } ubo;
 
-uint state = ubo.seed;
+uint state = 0;
 
 uint xorshift32()
 {
@@ -117,6 +117,7 @@ layout (std140, binding = 2) buffer Primitives
 struct Ray
 {
 	vec3 O;
+	float n1;
 	vec3 D;
 };
 
@@ -222,6 +223,26 @@ vec3 DiffuseReflection( vec3 N )
 	return R;
 }
 
+Ray reflect(Ray r, Intersection I)
+{
+	return Ray(I.pos, r.n1, r.D + 2.0 * -dot(I.normal, r.D) * I.normal);
+}
+
+Ray refract( Primitive p, Ray r, Intersection I )
+{
+	float R0r = (r.n1 - p.f2) / ( r.n1 + p.f2 );
+	float R0 = R0r * R0r;
+	float costheta1 = dot(I.normal, -r.D);
+	float fr = R0 + ( 1 - R0 ) * pow( 1 - costheta1, 5 );
+	if(frand() < fr)
+		return reflect(r, I);
+	float n12 = r.n1 / p.f2;
+	float k = 1 - n12 * n12 * ( 1 - costheta1 * costheta1 );
+	if( k < 0 )
+		return reflect(r, I);
+	return Ray( I.pos, 1 , n12 * r.D + I.normal * ( n12 * costheta1 - sqrt(k) ) );
+}
+
 vec3 Sample( Ray r )
 {
 	vec3 color = WHITE;
@@ -241,8 +262,20 @@ vec3 Sample( Ray r )
 			break;
 		}
 
+		if(primitives[I.id].material == MATERIAL_SPECULAR)
+		{
+			r = reflect( r, I );
+			//color *= primitives[I.id].v2;
+			continue;
+		}
+		if(primitives[I.id].material == MATERIAL_DIELICTRIC)
+		{
+			r = refract( primitives[I.id], r, I );
+			//color *= primitives[I.id].v2;//TODO: BEER STUFF
+			continue;
+		}
 		vec3 R = DiffuseReflection( I.normal );
-		r = Ray(I.pos, R );
+		r = Ray(I.pos, r.n1, R);
 
 		vec3 BRDF = primitives[I.id].v2 / PI;
 		color *= PI * 2.0f * BRDF * dot(I.normal, R);
@@ -254,10 +287,12 @@ void main()
 {
 	ivec2 dim = imageSize(resultImage);
 	vec2 uv = vec2(gl_GlobalInvocationID.xy) / dim;
+	state = ubo.seed ^ (ubo.seed * gl_GlobalInvocationID.x * gl_GlobalInvocationID.y);
 
-	Ray r = Ray( ubo.camera.pos, normalize(vec3((-1.0 + 2.0 * uv) * vec2(ubo.aspectRatio, 1.0), -1.0)) );
+	Ray r = Ray( ubo.camera.pos, 1, normalize(vec3((-1.0 + 2.0 * uv) * vec2(ubo.aspectRatio, 1.0), -1.0)) );
 
+	vec4 curColor = imageLoad(resultImage, ivec2(gl_GlobalInvocationID.xy));
 	vec3 finalColor = Sample(r);
-			
-	imageStore(resultImage, ivec2(gl_GlobalInvocationID.xy), vec4(finalColor, 0.0));
+	
+	imageStore(resultImage, ivec2(gl_GlobalInvocationID.xy), (vec4(finalColor, 0.0) + (ubo.samples-1) * curColor)/ubo.samples);
 }

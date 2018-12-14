@@ -67,13 +67,14 @@ public:
 		struct UBOCompute {							// Compute shader uniform block object
 			glm::vec3 lightPos;
 			float aspectRatio;						// Aspect ratio of the viewport
-			glm::vec4 fogColor = glm::vec4(1.0f, 0,0,0.0f);
+			glm::vec2 fogColor = glm::vec3(1.0f);
+			uint32_t seed;
+			uint32_t samples = 0;
 			struct {
 				glm::vec3 pos = glm::vec3(0.0f, 0.0f, 4.0f);
 				glm::vec3 lookat = glm::vec3(0.0f, 0.5f, 0.0f);
 				float fov = 10.0f;
 			} camera;
-			uint32_t seed;
 		} ubo;
 	} compute;
 
@@ -341,10 +342,13 @@ public:
 	{
 		// Spheres
 		std::vector<Primitive> primitves;
-		primitves.push_back(newSphere(glm::vec3(1.75f, -0.5f, 0.0f), 1.0f, glm::vec3(0.0f, 1.0f, 0.0f), 32.0f, MATERIAL_DIFFUSE));
-		primitves.push_back(newSphere(glm::vec3(0.0f, 1.0f, -0.5f), 1.0f, glm::vec3(0.65f, 0.77f, 0.97f), 32.0f, MATERIAL_DIFFUSE));
-		primitves.push_back(newSphere(glm::vec3(-1.75f, -0.75f, -0.5f), 1.25f, glm::vec3(100.f, 100.f, 100.f), 32.0f, MATERIAL_LIGHT));
-		primitves.push_back(newPlane(glm::vec3(0.0f, -1.0f, 0.0f), 4.0f, glm::vec3(1.0f), 32.0f, MATERIAL_DIFFUSE));
+		float roomDim = 4.0f;
+		primitves.push_back(newSphere(glm::vec3(1.75f, -0.5f, 0.0f), 1.0f, glm::vec3(0.0f, 1.0f, 0.0f), 1.52f, MATERIAL_DIFFUSE));
+		primitves.push_back(newSphere(glm::vec3(0.0f, 1.0f, -0.5f), 1.0f, glm::vec3(0.65f, 0.77f, 0.97f), 1.52f, MATERIAL_SPECULAR));
+		primitves.push_back(newSphere(glm::vec3(-1.75f, -0.75f, -0.5f), 1.25f, glm::vec3(10.f, 10.f, 10.f), 1.52f, MATERIAL_LIGHT));
+		primitves.push_back(newPlane(glm::vec3(0.0f, 1.0f, 0.0f), roomDim, glm::vec3(1.0f), 1.52f, MATERIAL_DIFFUSE));
+		primitves.push_back(newPlane(glm::vec3(-1.0f, 0.0f, 0.0f), roomDim, glm::vec3(1.0f, 0.0f, 0.0f), 1.52f, MATERIAL_DIFFUSE));
+		primitves.push_back(newPlane(glm::vec3(1.0f, 0.0f, 0.0f), roomDim, glm::vec3(0.0f, 1.0f, 0.0f), 1.52f, MATERIAL_DIFFUSE));
 		VkDeviceSize storageBufferSize = primitves.size() * sizeof(Primitive);
 
 		// Stage
@@ -700,7 +704,8 @@ public:
 		compute.ubo.lightPos.y = 0.0f + sin(glm::radians(timer * 360.0f)) * 2.0f;
 		compute.ubo.lightPos.z = 0.0f + cos(glm::radians(timer * 360.0f)) * 2.0f;
 		compute.ubo.camera.pos = camera.position * -1.0f;
-		compute.ubo.seed = rand();
+		compute.ubo.seed = (rand() + (rand() << 16)) * rand();
+		compute.ubo.samples++;
 		VK_CHECK_RESULT(compute.uniformBuffer.map());
 		memcpy(compute.uniformBuffer.mapped, &compute.ubo, sizeof(compute.ubo));
 		compute.uniformBuffer.unmap();
