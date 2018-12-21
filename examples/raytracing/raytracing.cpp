@@ -67,7 +67,7 @@ public:
 		struct UBOCompute {							// Compute shader uniform block object
 			glm::vec3 lightPos;
 			float aspectRatio;						// Aspect ratio of the viewport
-			glm::vec2 fogColor = glm::vec3(1.0f);
+			glm::vec2 fogColor = glm::vec2(1.0f);
 			uint32_t seed;
 			uint32_t samples = 0;
 			struct {
@@ -305,7 +305,7 @@ public:
 		vkCmdBindPipeline(compute.commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, compute.pipeline);
 		vkCmdBindDescriptorSets(compute.commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, compute.pipelineLayout, 0, 1, &compute.descriptorSet, 0, 0);
 
-		vkCmdDispatch(compute.commandBuffer, textureComputeTarget.width / 16, textureComputeTarget.height / 16, 1);
+		vkCmdDispatch(compute.commandBuffer, textureComputeTarget.width / 32, textureComputeTarget.height / 32, 1);
 
 		vkEndCommandBuffer(compute.commandBuffer);
 	}
@@ -347,6 +347,9 @@ public:
 		primitves.push_back(newSphere(glm::vec3(0.0f, 1.0f, -0.5f), 1.0f, glm::vec3(0.65f, 0.77f, 0.97f), 1.52f, MATERIAL_SPECULAR));
 		primitves.push_back(newSphere(glm::vec3(-1.75f, -0.75f, -0.5f), 1.25f, glm::vec3(10.f, 10.f, 10.f), 1.52f, MATERIAL_LIGHT));
 		primitves.push_back(newPlane(glm::vec3(0.0f, 1.0f, 0.0f), roomDim, glm::vec3(1.0f), 1.52f, MATERIAL_DIFFUSE));
+		primitves.push_back(newPlane(glm::vec3(0.0f, -1.0f, 0.0f), roomDim, glm::vec3(1.0f), 1.52f, MATERIAL_DIFFUSE));
+		primitves.push_back(newPlane(glm::vec3(0.0f, 0.0f, 1.0f), roomDim, glm::vec3(1.0f), 1.52f, MATERIAL_DIFFUSE));
+		primitves.push_back(newPlane(glm::vec3(0.0f, 0.0f, -1.0f), roomDim, glm::vec3(0.0f), 1.52f, MATERIAL_DIFFUSE));
 		primitves.push_back(newPlane(glm::vec3(-1.0f, 0.0f, 0.0f), roomDim, glm::vec3(1.0f, 0.0f, 0.0f), 1.52f, MATERIAL_DIFFUSE));
 		primitves.push_back(newPlane(glm::vec3(1.0f, 0.0f, 0.0f), roomDim, glm::vec3(0.0f, 1.0f, 0.0f), 1.52f, MATERIAL_DIFFUSE));
 		VkDeviceSize storageBufferSize = primitves.size() * sizeof(Primitive);
@@ -705,7 +708,10 @@ public:
 		compute.ubo.lightPos.z = 0.0f + cos(glm::radians(timer * 360.0f)) * 2.0f;
 		compute.ubo.camera.pos = camera.position * -1.0f;
 		compute.ubo.seed = (rand() + (rand() << 16)) * rand();
-		compute.ubo.samples++;
+		if(camera.updated)
+			compute.ubo.samples = 1;
+		else
+			compute.ubo.samples++;
 		VK_CHECK_RESULT(compute.uniformBuffer.map());
 		memcpy(compute.uniformBuffer.mapped, &compute.ubo, sizeof(compute.ubo));
 		compute.uniformBuffer.unmap();

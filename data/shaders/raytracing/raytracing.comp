@@ -2,7 +2,7 @@
 
 #version 450
 
-layout (local_size_x = 16, local_size_y = 16) in;
+layout (local_size_x = 32, local_size_y = 32) in;
 layout (binding = 0, rgba8) uniform image2D resultImage;
 
 #define EPSILON 0.0001
@@ -265,13 +265,13 @@ vec3 Sample( Ray r )
 		if(primitives[I.id].material == MATERIAL_SPECULAR)
 		{
 			r = reflect( r, I );
-			//color *= primitives[I.id].v2;
+			color *= primitives[I.id].v2;
 			continue;
 		}
 		if(primitives[I.id].material == MATERIAL_DIELICTRIC)
 		{
 			r = refract( primitives[I.id], r, I );
-			//color *= primitives[I.id].v2;//TODO: BEER STUFF
+			color *= primitives[I.id].v2;//TODO: BEER STUFF
 			continue;
 		}
 		vec3 R = DiffuseReflection( I.normal );
